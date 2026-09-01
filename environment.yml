@@ -1,0 +1,11 @@
+name: omics-assay-to-immport
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - r-base=4.3
+  - r-dplyr
+  - r-tidyr
+  - r-readr
+  - r-tibble
+  - r-optparse
