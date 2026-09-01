@@ -22,30 +22,55 @@ suppressPackageStartupMessages({
   library(tidyr)
   library(readr)
   library(tibble)
-  library(optparse)
 })
 
-# ---- CLI ARGS ---------------------------------------------------------------
+# ---- CLI ARGS (base R only -- no optparse, no runtime install needed) -----
+# Usage:
+#   salmon_to_immport_rnaseq.R <gene_tpm.tsv> <transcript_tpm.tsv> \
+#       [--repository_name Ensembl] [--transcript_type mRNA] \
+#       [--result_unit TPM] [--outdir .]
 
-option_list <- list(
-  make_option("--repository_name", type = "character", default = "Ensembl",
-              help = "Repository Name value [default: %default]"),
-  make_option("--transcript_type", type = "character", default = "mRNA",
-              help = "Transcript Type Reported value, applied to all rows [default: %default]"),
-  make_option("--result_unit", type = "character", default = "TPM",
-              help = "Result Unit Reported value [default: %default]"),
-  make_option("--outdir", type = "character", default = ".",
-              help = "Output directory [default: current dir]")
-)
+raw_args <- commandArgs(trailingOnly = TRUE)
 
-parser <- OptionParser(
-  usage = "%prog <gene_tpm.tsv> <transcript_tpm.tsv> [options]",
-  option_list = option_list
-)
-parsed <- parse_args(parser, positional_arguments = 2)
-opts <- parsed$options
-gene_counts_path <- parsed$args[1]
-tx_counts_path   <- parsed$args[2]
+is_flag <- grepl("^--", raw_args)
+first_flag_idx <- which(is_flag)[1]
+
+if (is.na(first_flag_idx)) {
+  positional <- raw_args
+  flag_args  <- character(0)
+} else {
+  positional <- raw_args[seq_len(first_flag_idx - 1)]
+  flag_args  <- raw_args[first_flag_idx:length(raw_args)]
+}
+
+if (length(positional) < 2) {
+  stop("Usage: salmon_to_immport_rnaseq.R <gene_tpm.tsv> <transcript_tpm.tsv> ",
+       "[--repository_name X] [--transcript_type X] [--result_unit X] [--outdir X]")
+}
+gene_counts_path <- positional[1]
+tx_counts_path   <- positional[2]
+
+parse_flags <- function(flag_args, defaults) {
+  opts <- defaults
+  i <- 1
+  while (i <= length(flag_args)) {
+    key <- sub("^--", "", flag_args[i])
+    if (key %in% names(defaults) && i + 1 <= length(flag_args)) {
+      opts[[key]] <- flag_args[i + 1]
+      i <- i + 2
+    } else {
+      i <- i + 1
+    }
+  }
+  opts
+}
+
+opts <- parse_flags(flag_args, list(
+  repository_name = "Ensembl",
+  transcript_type  = "mRNA",
+  result_unit      = "TPM",
+  outdir           = "."
+))
 
 dir.create(opts$outdir, showWarnings = FALSE, recursive = TRUE)
 
