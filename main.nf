@@ -44,7 +44,7 @@ process SALMON_TO_IMMPORT_RNASEQ {
     input:
     path gene_tpm
     path transcript_tpm
-    path linkage_file, stageAs: 'linkage_input.csv', optional: true
+    path linkage_file
 
     output:
     path "RNA_SEQ_Results_gene.tsv",       emit: gene_results
@@ -67,9 +67,15 @@ process SALMON_TO_IMMPORT_RNASEQ {
 workflow {
     gene_tpm_ch       = Channel.fromPath(params.gene_tpm, checkIfExists: true)
     transcript_tpm_ch = Channel.fromPath(params.transcript_tpm, checkIfExists: true)
-    linkage_ch        = params.linkage_file
-        ? Channel.fromPath(params.linkage_file, checkIfExists: true)
-        : Channel.value([])
+
+    // Use a real placeholder file when no linkage file is given, since the
+    // process declares a fixed 'path linkage_file' input (avoids the
+    // "optional:" syntax that broke on this Nextflow version).
+    if (params.linkage_file) {
+        linkage_ch = Channel.fromPath(params.linkage_file, checkIfExists: true)
+    } else {
+        linkage_ch = Channel.fromPath("${projectDir}/assets/NO_LINKAGE_FILE")
+    }
 
     SALMON_TO_IMMPORT_RNASEQ(gene_tpm_ch, transcript_tpm_ch, linkage_ch)
 }
