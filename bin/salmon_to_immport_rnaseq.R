@@ -13,17 +13,23 @@
 # --linkage_file is OPTIONAL. When provided, it must be a CSV with columns
 # `source_person_id,sample_id` (per Lifebit's lifebit_omics_linkage contract:
 # https://lifebit.atlassian.net/wiki/spaces/DEL/pages/2595454986)
-# where sample_id matches this run's Expsample ID (our sample column headers)
+# where sample_id matches this run's expsample_id (our sample column headers)
 # and source_person_id is the real participant identifier (must match
 # person.person_source_value in the target OMOP schema downstream).
 #
-# When --linkage_file is supplied, a `Participant ID` column is added to the
+# When --linkage_file is supplied, a `participant_id` column is added to the
 # output, joined from sample_id -> source_person_id. Multiple samples can map
 # to the same participant (e.g. baseline + follow-up), matching the real
 # many-samples-to-one-participant pattern documented in the linkage contract.
 #
 # When --linkage_file is omitted, output is unchanged from before -- no
-# Participant ID column is added.
+# participant_id column is added.
+#
+# NOTE ON COLUMN NAMING: output column headers are lowercase_with_underscores
+# (e.g. `expsample_id`, not `Expsample ID`). This matches source_column_name
+# exactly as used in Lifebit's maintained OMOP field map templates
+# (lifebit-ai/immport_to_omop), so files from this script can be fed directly
+# into the OMOP ETL without any manual header renaming.
 #
 # Output (written to --outdir, default: current directory):
 #   RNA_SEQ_Results_gene.tsv
@@ -102,7 +108,7 @@ stopifnot(opts$result_unit %in% valid_result_units)
 
 # ---- OPTIONAL LINKAGE FILE --------------------------------------------------
 # Per lifebit_omics_linkage contract: source_person_id,sample_id
-# sample_id here must match our Expsample ID (sample column headers).
+# sample_id here must match our expsample_id (sample column headers).
 
 has_linkage <- !is.na(opts$linkage_file) && nzchar(opts$linkage_file)
 
@@ -138,6 +144,9 @@ derive_sample_map <- function(path, n_id_cols) {
 }
 
 # ---- CORE CONVERSION FUNCTION ----------------------------------------------
+# Column names below are lowercase_with_underscores throughout, matching
+# source_column_name in Lifebit's maintained OMOP field map templates
+# (lifebit-ai/immport_to_omop) exactly -- no renaming needed downstream.
 
 melt_to_immport <- function(counts_path, id_col, sample_map) {
   df <- read_tsv(counts_path, show_col_types = FALSE)
@@ -151,55 +160,55 @@ melt_to_immport <- function(counts_path, id_col, sample_map) {
 
   result <- df %>%
     select(all_of(id_col), all_of(sample_cols)) %>%
-    rename(`Reference Transcript ID` = !!id_col) %>%
+    rename(reference_transcript_id = !!id_col) %>%
     pivot_longer(
       cols = all_of(sample_cols),
       names_to = "sample",
-      values_to = "Value Reported"
+      values_to = "value_reported"
     ) %>%
     mutate(
-      `Expsample ID`             = sample_map[sample],
-      `Repository Name`          = opts$repository_name,
-      `Transcript Type Reported` = opts$transcript_type,
-      `Result Unit Reported`     = opts$result_unit,
-      `Comments`                 = ""
+      expsample_id             = sample_map[sample],
+      repository_name          = opts$repository_name,
+      transcript_type_reported = opts$transcript_type,
+      result_unit_reported     = opts$result_unit,
+      comments                 = ""
     )
 
   if (has_linkage) {
     result <- result %>%
-      mutate(`Participant ID` = linkage_map[`Expsample ID`])
+      mutate(participant_id = linkage_map[expsample_id])
 
     unmatched <- result %>%
-      filter(is.na(`Participant ID`)) %>%
-      pull(`Expsample ID`) %>%
+      filter(is.na(participant_id)) %>%
+      pull(expsample_id) %>%
       unique()
     if (length(unmatched) > 0) {
       warning("No linkage entry found for ", length(unmatched),
-              " Expsample ID(s): ", paste(unmatched, collapse = ", "),
-              " -- Participant ID left blank for these rows.")
+              " expsample_id(s): ", paste(unmatched, collapse = ", "),
+              " -- participant_id left blank for these rows.")
     }
 
     result <- result %>%
       select(
-        `Participant ID`,
-        `Expsample ID`,
-        `Reference Transcript ID`,
-        `Repository Name`,
-        `Transcript Type Reported`,
-        `Result Unit Reported`,
-        `Value Reported`,
-        `Comments`
+        participant_id,
+        expsample_id,
+        reference_transcript_id,
+        repository_name,
+        transcript_type_reported,
+        result_unit_reported,
+        value_reported,
+        comments
       )
   } else {
     result <- result %>%
       select(
-        `Expsample ID`,
-        `Reference Transcript ID`,
-        `Repository Name`,
-        `Transcript Type Reported`,
-        `Result Unit Reported`,
-        `Value Reported`,
-        `Comments`
+        expsample_id,
+        reference_transcript_id,
+        repository_name,
+        transcript_type_reported,
+        result_unit_reported,
+        value_reported,
+        comments
       )
   }
 
@@ -229,11 +238,11 @@ cat("1. Repository Name = '", opts$repository_name,
 cat("2. Transcript Type Reported = '", opts$transcript_type,
     "' applied to ALL rows -- needs real biotype data to be fully accurate.\n", sep = "")
 if (has_linkage) {
-  cat("3. Participant ID populated from linkage file '", opts$linkage_file,
+  cat("3. participant_id populated from linkage file '", opts$linkage_file,
       "'. Confirm source_person_id values match person.person_source_value\n",
       "   in the target OMOP schema before downstream ingestion.\n", sep = "")
 } else {
-  cat("3. No --linkage_file provided -- output has no Participant ID column.\n",
+  cat("3. No --linkage_file provided -- output has no participant_id column.\n",
       "   Provide one (source_person_id,sample_id CSV) if this output feeds\n",
       "   into OMOP ingestion requiring participant linkage.\n", sep = "")
 }
