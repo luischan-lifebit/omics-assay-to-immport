@@ -6,6 +6,14 @@ nextflow.enable.dsl = 2
  * omics-assay-to-immport
  * Converts Salmon RNA-seq TPM output into ImmPort's RNA_SEQ_Results format.
  *
+ * Writes TWO output formats on every run:
+ *   1. CloudOS/OMOP format (results/) -- lowercase_with_underscores headers,
+ *      ready to feed directly into the OMOP ETL.
+ *   2. Canonical ImmPort submission format (results/immport_original_format/)
+ *      -- Title Case headers matching ImmPort's official template, for
+ *      actual ImmPort submission / the ImmPort Validator.
+ * Same data in both; only the header row differs.
+ *
  * Usage:
  *   nextflow run main.nf \
  *       --gene_tpm salmon.merged.gene_tpm.tsv \
@@ -47,8 +55,14 @@ process SALMON_TO_IMMPORT_RNASEQ {
     path linkage_file
 
     output:
+    // CloudOS / OMOP format (lowercase_with_underscores headers)
     path "RNA_SEQ_Results_gene.tsv",       emit: gene_results
     path "RNA_SEQ_Results_transcript.tsv", emit: transcript_results
+    // Canonical ImmPort submission format (Title Case headers) -- same data,
+    // published under immport_original_format/ so both are visible in
+    // CloudOS's Results tab
+    path "immport_original_format/RNA_SEQ_Results_gene.tsv",       emit: gene_results_original
+    path "immport_original_format/RNA_SEQ_Results_transcript.tsv", emit: transcript_results_original
 
     script:
     def linkage_arg = params.linkage_file ? "--linkage_file ${linkage_file}" : ""
@@ -84,12 +98,14 @@ workflow.onComplete {
     log.info """
     Pipeline complete: ${workflow.success ? 'OK' : 'FAILED'}
     Output directory : ${params.outdir}
+      - CloudOS/OMOP format:            ${params.outdir}/RNA_SEQ_Results_{gene,transcript}.tsv
+      - ImmPort submission format:      ${params.outdir}/immport_original_format/RNA_SEQ_Results_{gene,transcript}.tsv
     Linkage file used: ${params.linkage_file ?: '(none -- no Participant ID column added)'}
 
     Reminders (still open, per README):
       1. Repository Name  = '${params.repository_name}' -- confirm correct for this data's ID system.
       2. Transcript Type   = '${params.transcript_type}' applied to ALL rows -- needs real biotype data.
       ${params.linkage_file ? "3. Confirm linkage file's source_person_id values match person.person_source_value in the target OMOP schema." : "3. No linkage file provided -- add one if this feeds into OMOP ingestion requiring participant linkage."}
-    Run output through the ImmPort Validator before any real upload.
+    Run the immport_original_format/ output through the ImmPort Validator before any real upload.
     """
 }
