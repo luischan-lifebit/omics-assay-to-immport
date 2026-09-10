@@ -25,15 +25,27 @@
 # When --linkage_file is omitted, output is unchanged from before -- no
 # participant_id column is added.
 #
-# NOTE ON COLUMN NAMING: output column headers are lowercase_with_underscores
-# (e.g. `expsample_id`, not `Expsample ID`). This matches source_column_name
-# exactly as used in Lifebit's maintained OMOP field map templates
-# (lifebit-ai/immport_to_omop), so files from this script can be fed directly
-# into the OMOP ETL without any manual header renaming.
+# OUTPUT -- TWO FORMATS ARE WRITTEN:
 #
-# Output (written to --outdir, default: current directory):
-#   RNA_SEQ_Results_gene.tsv
-#   RNA_SEQ_Results_transcript.tsv
+#   1. CloudOS/OMOP format (--outdir, e.g. results/):
+#        RNA_SEQ_Results_gene.tsv
+#        RNA_SEQ_Results_transcript.tsv
+#      Column headers are lowercase_with_underscores (e.g. `expsample_id`),
+#      matching source_column_name exactly as used in Lifebit's maintained
+#      OMOP field map templates (lifebit-ai/immport_to_omop). Feed these
+#      directly into the OMOP ETL -- no manual header renaming needed.
+#
+#   2. Canonical ImmPort submission format (--outdir/immport_original_format/):
+#        RNA_SEQ_Results_gene.tsv
+#        RNA_SEQ_Results_transcript.tsv
+#      Column headers match ImmPort's official RNA_SEQ_Results template
+#      exactly (e.g. `Expsample ID`), as required for actual ImmPort
+#      submission / the ImmPort Validator. Same data, same row order --
+#      only the header row differs from format 1.
+#
+#   The two formats hold identical data; only the header row differs. Both
+#   are written on every run so neither the CloudOS/OMOP path nor the
+#   ImmPort submission path is ever missing an up-to-date file.
 # ---------------------------------------------------------------------------
 
 suppressPackageStartupMessages({
@@ -90,6 +102,8 @@ opts <- parse_flags(flag_args, list(
 ))
 
 dir.create(opts$outdir, showWarnings = FALSE, recursive = TRUE)
+original_format_dir <- file.path(opts$outdir, "immport_original_format")
+dir.create(original_format_dir, showWarnings = FALSE, recursive = TRUE)
 
 # ---- CONTROLLED VOCAB (from RNA_SEQ_Results.xlsx "lookup" sheet) ----------
 
@@ -143,10 +157,36 @@ derive_sample_map <- function(path, n_id_cols) {
   setNames(samples, samples)
 }
 
+# ---- CANONICAL IMMPORT HEADER NAMES ----------------------------------------
+# Maps each lowercase_with_underscores column back to ImmPort's official
+# RNA_SEQ_Results template header, for the immport_original_format/ output.
+
+immport_header_map <- c(
+  participant_id            = "Participant ID",
+  expsample_id              = "Expsample ID",
+  reference_transcript_id   = "Reference Transcript ID",
+  repository_name           = "Repository Name",
+  transcript_type_reported  = "Transcript Type Reported",
+  result_unit_reported      = "Result Unit Reported",
+  value_reported            = "Value Reported",
+  comments                  = "Comments"
+)
+
+to_immport_original_headers <- function(df) {
+  new_names <- immport_header_map[colnames(df)]
+  # any column not in the map (shouldn't happen) keeps its original name
+  new_names[is.na(new_names)] <- colnames(df)[is.na(new_names)]
+  colnames(df) <- unname(new_names)
+  df
+}
+
 # ---- CORE CONVERSION FUNCTION ----------------------------------------------
 # Column names below are lowercase_with_underscores throughout, matching
 # source_column_name in Lifebit's maintained OMOP field map templates
 # (lifebit-ai/immport_to_omop) exactly -- no renaming needed downstream.
+# The Title Case / ImmPort-canonical version is derived from this at write
+# time via to_immport_original_headers(), so both outputs always agree on
+# data -- only the header row differs.
 
 melt_to_immport <- function(counts_path, id_col, sample_map) {
   df <- read_tsv(counts_path, show_col_types = FALSE)
@@ -215,20 +255,28 @@ melt_to_immport <- function(counts_path, id_col, sample_map) {
   result
 }
 
+write_both_formats <- function(result, basename) {
+  # 1. CloudOS/OMOP format -- lowercase_with_underscores (unchanged path/name)
+  cloudos_out <- file.path(opts$outdir, basename)
+  write_tsv(result, cloudos_out)
+  cat("Wrote", nrow(result), "rows to", cloudos_out, "(CloudOS/OMOP format)\n")
+
+  # 2. Canonical ImmPort submission format -- Title Case, spaced headers
+  original_out <- file.path(original_format_dir, basename)
+  write_tsv(to_immport_original_headers(result), original_out)
+  cat("Wrote", nrow(result), "rows to", original_out, "(ImmPort submission format)\n")
+}
+
 # ---- RUN ---------------------------------------------------------------------
 
 gene_sample_map <- derive_sample_map(gene_counts_path, n_id_cols = 2)  # gene_id, gene_name
 tx_sample_map   <- derive_sample_map(tx_counts_path, n_id_cols = 2)    # tx, gene_id
 
 gene_results <- melt_to_immport(gene_counts_path, "gene_id", gene_sample_map)
-gene_out <- file.path(opts$outdir, "RNA_SEQ_Results_gene.tsv")
-write_tsv(gene_results, gene_out)
-cat("Wrote", nrow(gene_results), "rows to", gene_out, "\n")
+write_both_formats(gene_results, "RNA_SEQ_Results_gene.tsv")
 
 tx_results <- melt_to_immport(tx_counts_path, "tx", tx_sample_map)
-tx_out <- file.path(opts$outdir, "RNA_SEQ_Results_transcript.tsv")
-write_tsv(tx_results, tx_out)
-cat("Wrote", nrow(tx_results), "rows to", tx_out, "\n")
+write_both_formats(tx_results, "RNA_SEQ_Results_transcript.tsv")
 
 # ---- SUMMARY -----------------------------------------------------------------
 
@@ -246,3 +294,6 @@ if (has_linkage) {
       "   Provide one (source_person_id,sample_id CSV) if this output feeds\n",
       "   into OMOP ingestion requiring participant linkage.\n", sep = "")
 }
+cat("4. Two output formats written -- see '", opts$outdir,
+    "/' for the CloudOS/OMOP format and '", original_format_dir,
+    "/' for the ImmPort submission format.\n", sep = "")
