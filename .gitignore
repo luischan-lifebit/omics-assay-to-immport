@@ -1,0 +1,20 @@
+# Pipeline output directories
+results/
+test_results/
+
+# Stray generated result files (e.g. if run locally outside --outdir)
+RNA_SEQ_Results_gene.tsv
+RNA_SEQ_Results_transcript.tsv
+cleaned_demographics.tsv
+
+# Nextflow runtime files
+.nextflow/
+.nextflow.log*
+work/
+
+# R
+.Rhistory
+.Rproj.user/
+
+# OS
+.DS_Store
