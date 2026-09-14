@@ -10,7 +10,7 @@ nextflow.enable.dsl = 2
  *
  *   1. RNA-seq conversion (--gene_tpm / --transcript_tpm)
  *        SALMON_TO_IMMPORT_RNASEQ  -- TPM matrices -> ImmPort long format
- *        RENAME_TO_IMMPORT_FORMAT  -- generic header rename -> ImmPort
+ *        IMMPORT_DATA_MODEL_TO_OMOP_COMPATIBLE_FORMAT  -- generic header rename -> ImmPort
  *                                     submission format (Title Case)
  *
  *   2. Demographics cleaning (--demographics_file)
