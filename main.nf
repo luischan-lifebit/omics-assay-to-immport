@@ -4,49 +4,54 @@ nextflow.enable.dsl = 2
 
 /*
  * omics-assay-to-immport
- * Converts Salmon RNA-seq TPM output into ImmPort's RNA_SEQ_Results format.
  *
- * Two processes:
- *   1. SALMON_TO_IMMPORT_RNASEQ -- the science: TPM matrices -> ImmPort long
- *      format, lowercase_with_underscores headers (CloudOS/OMOP-ready).
- *   2. RENAME_TO_IMMPORT_FORMAT -- generic header renaming: takes process 1's
- *      output + a header-map asset, produces the canonical ImmPort
- *      submission format (Title Case headers) alongside it. This step knows
- *      nothing about RNA-seq specifically, so it's reusable as-is for other
- *      assay types (proteomics, demographics) by swapping the header-map
- *      asset -- splitting format concerns from conversion logic, at the
- *      workflow level rather than inside each conversion script.
+ * Two independent capabilities, either or both runnable in a single
+ * invocation:
+ *
+ *   1. RNA-seq conversion (--gene_tpm / --transcript_tpm)
+ *        SALMON_TO_IMMPORT_RNASEQ  -- TPM matrices -> ImmPort long format
+ *        RENAME_TO_IMMPORT_FORMAT  -- generic header rename -> ImmPort
+ *                                     submission format (Title Case)
+ *
+ *   2. Demographics cleaning (--demographics_file)
+ *        CLEAN_DEMOGRAPHICS -- reformats a user-provided demographic file's
+ *        headers to match what immport_to_omop's field map expects. Does
+ *        not generate or infer missing data; fails with a clear message if
+ *        a required column is missing.
+ *
+ * --linkage_file is shared across both: it adds a participant_id column to
+ * the RNA-seq output, and is used by CLEAN_DEMOGRAPHICS to check that
+ * demographic participant_id values match the linkage file's
+ * source_person_id values.
  *
  * Usage:
- *   nextflow run main.nf \
- *       --gene_tpm salmon.merged.gene_tpm.tsv \
- *       --transcript_tpm salmon.merged.transcript_tpm.tsv \
- *       --outdir results
- *
- * Optional participant linkage (adds a Participant ID column, joined from
- * sample_id -> source_person_id, per Lifebit's lifebit_omics_linkage
- * contract):
- *   nextflow run main.nf \
- *       --gene_tpm salmon.merged.gene_tpm.tsv \
- *       --transcript_tpm salmon.merged.transcript_tpm.tsv \
- *       --linkage_file lifebit_omics_linkage.csv \
- *       --outdir results
+ *   nextflow run main.nf --gene_tpm <path> --transcript_tpm <path> --outdir results
+ *   nextflow run main.nf --demographics_file <path> --outdir results
+ *   nextflow run main.nf --gene_tpm <path> --transcript_tpm <path> \
+ *       --demographics_file <path> --linkage_file <path> --outdir results
  */
 
-params.gene_tpm         = null
-params.transcript_tpm   = null
-params.outdir           = "results"
-params.repository_name  = "Ensembl"
-params.transcript_type  = "mRNA"
-params.result_unit      = "TPM"
-params.linkage_file     = null   // optional: source_person_id,sample_id CSV
-params.header_map       = "${projectDir}/assets/immport_header_map.csv"
+params.gene_tpm          = null
+params.transcript_tpm    = null
+params.demographics_file = null
+params.outdir            = "results"
+params.repository_name   = "Ensembl"
+params.transcript_type   = "mRNA"
+params.result_unit       = "TPM"
+params.linkage_file      = null   // optional: source_person_id,sample_id CSV
+params.header_map        = "${projectDir}/assets/immport_header_map.csv"
 
-if (!params.gene_tpm || !params.transcript_tpm) {
+def run_rnaseq       = params.gene_tpm && params.transcript_tpm
+def run_demographics  = params.demographics_file as boolean
+
+if (!run_rnaseq && !run_demographics) {
     error """
     Missing required input.
-    Usage: nextflow run main.nf --gene_tpm <path> --transcript_tpm <path> [--outdir results] [--linkage_file <path>]
+    Provide either --gene_tpm + --transcript_tpm, or --demographics_file (or both).
     """
+}
+if ((params.gene_tpm && !params.transcript_tpm) || (!params.gene_tpm && params.transcript_tpm)) {
+    error "Both --gene_tpm and --transcript_tpm are required together."
 }
 
 process SALMON_TO_IMMPORT_RNASEQ {
@@ -93,42 +98,70 @@ process RENAME_TO_IMMPORT_FORMAT {
     """
 }
 
-workflow {
-    gene_tpm_ch       = Channel.fromPath(params.gene_tpm, checkIfExists: true)
-    transcript_tpm_ch = Channel.fromPath(params.transcript_tpm, checkIfExists: true)
-    header_map_ch     = Channel.fromPath(params.header_map, checkIfExists: true)
+process CLEAN_DEMOGRAPHICS {
+    tag "clean_demographics"
+    publishDir params.outdir, mode: 'copy'
 
-    // Use a real placeholder file when no linkage file is given, since the
-    // process declares a fixed 'path linkage_file' input (avoids the
-    // "optional:" syntax that broke on this Nextflow version).
+    input:
+    path demographics_file
+    path linkage_file
+
+    output:
+    path "cleaned_demographics.tsv", emit: cleaned_demographics
+
+    script:
+    def linkage_arg = params.linkage_file ? "--linkage_file ${linkage_file}" : ""
+    """
+    clean_demographics.R \\
+        ${demographics_file} \\
+        --outdir . \\
+        ${linkage_arg}
+    """
+}
+
+workflow {
+    // shared linkage channel -- real placeholder when not provided, since
+    // both processes declare a fixed 'path linkage_file' input
     if (params.linkage_file) {
         linkage_ch = Channel.fromPath(params.linkage_file, checkIfExists: true)
     } else {
         linkage_ch = Channel.fromPath("${projectDir}/assets/NO_LINKAGE_FILE")
     }
 
-    SALMON_TO_IMMPORT_RNASEQ(gene_tpm_ch, transcript_tpm_ch, linkage_ch)
+    if (run_rnaseq) {
+        gene_tpm_ch       = Channel.fromPath(params.gene_tpm, checkIfExists: true)
+        transcript_tpm_ch = Channel.fromPath(params.transcript_tpm, checkIfExists: true)
+        header_map_ch     = Channel.fromPath(params.header_map, checkIfExists: true)
 
-    // Run the generic renamer on both outputs, each paired with the same
-    // header-map asset.
-    rnaseq_outputs_ch = SALMON_TO_IMMPORT_RNASEQ.out.gene_results
-        .mix(SALMON_TO_IMMPORT_RNASEQ.out.transcript_results)
+        SALMON_TO_IMMPORT_RNASEQ(gene_tpm_ch, transcript_tpm_ch, linkage_ch)
 
-    RENAME_TO_IMMPORT_FORMAT(rnaseq_outputs_ch, header_map_ch)
+        rnaseq_outputs_ch = SALMON_TO_IMMPORT_RNASEQ.out.gene_results
+            .mix(SALMON_TO_IMMPORT_RNASEQ.out.transcript_results)
+
+        RENAME_TO_IMMPORT_FORMAT(rnaseq_outputs_ch, header_map_ch)
+    }
+
+    if (run_demographics) {
+        demographics_ch = Channel.fromPath(params.demographics_file, checkIfExists: true)
+        CLEAN_DEMOGRAPHICS(demographics_ch, linkage_ch)
+    }
 }
 
 workflow.onComplete {
     log.info """
     Pipeline complete: ${workflow.success ? 'OK' : 'FAILED'}
     Output directory : ${params.outdir}
-      - CloudOS/OMOP format:            ${params.outdir}/RNA_SEQ_Results_{gene,transcript}.tsv
-      - ImmPort submission format:      ${params.outdir}/immport_original_format/RNA_SEQ_Results_{gene,transcript}.tsv
-    Linkage file used: ${params.linkage_file ?: '(none -- no Participant ID column added)'}
+    RNA-seq conversion run   : ${run_rnaseq}
+    Demographics cleaning run: ${run_demographics}
+    Linkage file used: ${params.linkage_file ?: '(none)'}
 
-    Reminders (still open, per README):
-      1. Repository Name  = '${params.repository_name}' -- confirm correct for this data's ID system.
-      2. Transcript Type   = '${params.transcript_type}' applied to ALL rows -- needs real biotype data.
-      ${params.linkage_file ? "3. Confirm linkage file's source_person_id values match person.person_source_value in the target OMOP schema." : "3. No linkage file provided -- add one if this feeds into OMOP ingestion requiring participant linkage."}
-    Run the immport_original_format/ output through the ImmPort Validator before any real upload.
+    ${run_rnaseq ? """RNA-seq reminders:
+      - Repository Name = '${params.repository_name}' -- confirm correct for this data's ID system.
+      - Transcript Type  = '${params.transcript_type}' applied to ALL rows -- needs real biotype data.
+      Run the immport_original_format/ output through the ImmPort Validator before any real upload.""" : ""}
+    ${run_demographics ? """Demographics reminders:
+      - Required fields: participant_id, gender, year_of_birth, race, ethnicity.
+      - date_of_birth -> birth_datetime is included if present, but not required.
+      ${params.linkage_file ? "- Check the log above for any participant_id/linkage mismatch warnings." : "- No linkage file provided -- participant_id/linkage consistency was not checked."}""" : ""}
     """
 }
