@@ -1,0 +1,9 @@
+old_name,new_name
+participant_id,Participant ID
+expsample_id,Expsample ID
+reference_transcript_id,Reference Transcript ID
+repository_name,Repository Name
+transcript_type_reported,Transcript Type Reported
+result_unit_reported,Result Unit Reported
+value_reported,Value Reported
+comments,Comments
