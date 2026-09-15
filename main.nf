@@ -10,7 +10,7 @@ nextflow.enable.dsl = 2
  *
  *   1. RNA-seq conversion (--gene_tpm / --transcript_tpm)
  *        SALMON_TO_IMMPORT_RNASEQ  -- TPM matrices -> ImmPort long format
- *        IMMPORT_DATA_MODEL_TO_OMOP_COMPATIBLE_FORMAT  -- generic header rename -> ImmPort
+ *        RENAME_TO_IMMPORT_FORMAT  -- generic header rename -> ImmPort
  *                                     submission format (Title Case)
  *
  *   2. Demographics cleaning (--demographics_file)
@@ -82,19 +82,26 @@ process SALMON_TO_IMMPORT_RNASEQ {
 }
 
 process RENAME_TO_IMMPORT_FORMAT {
+    // Writes to a renamed_-prefixed filename inside the task (never the
+    // same name as the staged input file), then strips that prefix back
+    // off at publish time via saveAs. This avoids "Cannot open file for
+    // writing" errors under Fusion / accelerated file staging, which mounts
+    // inputs from S3 in a way that doesn't tolerate a task trying to
+    // overwrite the exact file it just read.
     tag "${input_tsv.baseName}"
-    publishDir "${params.outdir}/immport_original_format", mode: 'copy'
+    publishDir "${params.outdir}/immport_original_format", mode: 'copy',
+        saveAs: { filename -> filename.replaceFirst(/^renamed_/, '') }
 
     input:
     path input_tsv
     path header_map
 
     output:
-    path "${input_tsv.name}", emit: renamed
+    path "renamed_${input_tsv.name}", emit: renamed
 
     script:
     """
-    rename_headers.R ${input_tsv} ${header_map} ${input_tsv.name}
+    rename_headers.R ${input_tsv} ${header_map} renamed_${input_tsv.name}
     """
 }
 
